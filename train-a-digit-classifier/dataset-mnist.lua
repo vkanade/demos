@@ -47,11 +47,19 @@ function mnist.loadDataset(fileName, maxLoad)
    function dataset:normalize(mean_, std_)
       local mean = mean_ or data:view(data:size(1), -1):mean(1)
       local std = std_ or data:view(data:size(1), -1):std(1, true)
+
+		-- Several pixels are always 0 in mnist
+		-- Only normalize those pixels that have some variance
+		local stdinv = std:squeeze():clone()
+		for i=1,std:size(2) do
+			if std[1][i] > 0 then
+				stdinv[i] = 1/std[1][i]
+			end
+		end
+
       for i=1,data:size(1) do
-         data[i]:add(-mean[1][i])
-         if std[1][i] > 0 then
-            tensor:select(2, i):mul(1/std[1][i])
-         end
+         data[i]:add(-mean[1])
+			data[i]:cmul(stdinv)
       end
       return mean, std
    end
