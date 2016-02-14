@@ -43,6 +43,8 @@ function mnist.loadDataset(fileName, maxLoad)
    local dataset = {}
    dataset.data = data
    dataset.labels = labels
+	dataset.encode_one_hot_targets = false
+	dataset.encode_binary_targets = false
 
    function dataset:normalize(mean_, std_)
       local mean = mean_ or data:view(data:size(1), -1):mean(1)
@@ -76,6 +78,52 @@ function mnist.loadDataset(fileName, maxLoad)
       return nExample
    end
 
+	function dataset:makeOneHotEncoding() 
+		if encode_one_hot_targets then
+			print("Targets are coded as one hot vectors already!")
+			return
+		end
+		encode_one_hot_targets = true
+		local num_classes = 0
+		for i =1,labels:size(1) do
+			if tonumber(labels[i]) > num_classes then
+				num_classes = tonumber(labels[i])
+			end
+		end
+		self.targets = torch.FloatTensor(data:size(1), num_classes)
+		for i=1,data:size(1) do
+			self.targets[i]:zero()
+			self.targets[i][tonumber(labels[i])] = 1
+		end
+	end
+
+	function dataset:makeBinaryEncoding() 
+		if encode_binary_targets then
+			print("Targets are coded as binary vectors already!")
+			return
+		end
+		encode_binary_targets = true
+		local num_classes = 0
+		for i =1,labels:size(1) do
+			if tonumber(labels[i]) > num_classes then
+				num_classes = tonumber(labels[i])
+			end
+		end
+		local ndim = math.ceil(math.log(num_classes)/math.log(2))
+		self.btargets = torch.FloatTensor(data:size(1), ndim)
+		for i=1,data:size(1) do
+			self.btargets[i]:zero()
+			local pow2 = 1
+			local numeric_label = tonumber(labels[i])
+			for j=1,ndim do
+				if numeric_label % math.pow(2, pow2) >= math.pow(2, pow2-1) then
+					self.btargets[i][j] = 1
+				end
+				pow2 = pow2 + 1
+			end
+		end
+	end
+
    local labelvector = torch.zeros(10)
 
    setmetatable(dataset, {__index = function(self, index)
@@ -89,3 +137,4 @@ function mnist.loadDataset(fileName, maxLoad)
 
    return dataset
 end
+
