@@ -43,7 +43,6 @@ function mnist.loadDataset(fileName, maxLoad)
    local dataset = {}
    dataset.data = data
    dataset.labels = labels
-	-- if set to true, then the targets will be encoded in binary
 	dataset.binary_output = false
 
    function dataset:normalize(mean_, std_)
@@ -102,18 +101,16 @@ function mnist.loadDataset(fileName, maxLoad)
 	end
 
    setmetatable(dataset, {__index = function(self, index)
-			     local input = self.data[index]
-			     local class = self.labels[index]
-			     --local label = labelvector:zero()
-			     --label[class] = 1
-				  if self.binary_output then
-					  label = binaryOutput(class)
-				  else 
-					  label = ohOutput(class)
-				  end
-			     local example = {input, label}
-              return example
-   end})
+			     	local input = self.data[index]
+			     	local class = self.labels[index]
+				  	if self.binary_output then
+						label = binaryOutput(class)
+				  	else 
+					  	label = ohOutput(class)
+				  	end
+			     	local example = {input, label}
+              	return example
+   				end})
 
    return dataset
 end

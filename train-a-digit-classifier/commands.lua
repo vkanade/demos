@@ -1,4 +1,4 @@
-dofile('train-on-mnist2.lua');
+dofile('dataset-mnist.lua');
 
 -- torch.manualSeed(1)
 
