@@ -63,7 +63,7 @@ torch.setdefaulttensortype('torch.FloatTensor')
 
 -- MNIST specific definitions
 
-mtargs = {}
+mt = {}
 mt.classes = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '10'}
 mt.geometry = {32, 32}
 
@@ -170,8 +170,8 @@ function convert_to_labels(preds)
 	batchSize = preds:size(1)
 	local pred_labels = torch.Tensor(batchSize)
 	if opt.encoding == 'binary' then
-		local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
-		pred_labels = bmul*preds:ge(0.5):typeAs(bmul)
+		local bmul = torch.Tensor{1, 2, 4, 8}:reshape(4, 1)
+		pred_labels = preds:ge(0.5):typeAs(bmul)*bmul
 	else
 		_, pred_labels = preds:max(2)
 	end
@@ -252,13 +252,7 @@ function mnist_train.train(dataset)
 			tr_loss = tr_loss + f*batchSize
 
 			-- convert targets into pred_labels
-			local pred_labels = torch.Tensor(batchSize)
-			if opt.encoding == 'binary' then
-				local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
-				pred_labels = bmul * preds:ge(0.5):typeAs(bmul)
-			else
-				_, pred_labels = preds:max(1)
-			end
+			local pred_labels = convert_to_labels(preds)
 			-- update confusion matrix
 			confusion:batchAdd(pred_labels, target_labels)
 
@@ -362,13 +356,8 @@ function mnist_train.test(dataset)
 		tst_loss = tst_loss + criterion:forward(preds,targets) * batchSize
 
 		-- predict labels
-		local pred_labels = torch.Tensor(batchSize)
-		if opt.encoding == 'binary' then
-			local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
-			pred_labels = bmul*preds:ge(0.5):typeAs(bmul)
-		else
-			_, pred_labels = preds:max(1)
-		end
+		local pred_labels = convert_to_labels(preds)
+		-- add to confusion matrix
 		confusion:batchAdd(pred_labels, target_labels)
 	end
 
@@ -414,7 +403,8 @@ function do_all()
 	end
 end
 
-print('If you did dofile from th')
-print('First check opt and mt')
-print('Only then run do_all()')
+do_all()
+--print('If you did dofile from th')
+--print('First check opt and mt')
+--print('Only then run do_all()')
 ---------------------------------------------------------------------------------------

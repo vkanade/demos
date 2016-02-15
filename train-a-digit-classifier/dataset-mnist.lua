@@ -77,7 +77,7 @@ function mnist.loadDataset(fileName, maxLoad)
       return nExample
    end
 
-	function dataset:binaryOutput(class)
+	function binaryOutput(class)
 		local ovector = torch.Tensor(4):zero()
 		if (class % 2 >= 1) then
 			ovector[1] = 1
@@ -94,7 +94,7 @@ function mnist.loadDataset(fileName, maxLoad)
 		return ovector
 	end
 
-   function dataset:ohOutput(class)
+   function ohOutput(class)
 		local ovector = torch.Tensor(10):zero()
 		ovector[class] = 1
 		return ovector
