@@ -43,7 +43,7 @@ function mnist.loadDataset(fileName, maxLoad)
    local dataset = {}
    dataset.data = data
    dataset.labels = labels
-	dataset.binary = false
+	dataset.binary_output = false
 
    function dataset:normalize(mean_, std_)
       local mean = mean_ or data:view(data:size(1), -1):mean(1)
@@ -77,7 +77,7 @@ function mnist.loadDataset(fileName, maxLoad)
       return nExample
    end
 
-	function binaryOutput(class)
+	function dataset:binaryOutput(class)
 		local ovector = torch.Tensor(4):zero()
 		if (class % 2 >= 1) then
 			ovector[1] = 1
@@ -94,7 +94,7 @@ function mnist.loadDataset(fileName, maxLoad)
 		return ovector
 	end
 
-   function ohOutput(class)
+   function dataset:ohOutput(class)
 		local ovector = torch.Tensor(10):zero()
 		ovector[class] = 1
 		return ovector
