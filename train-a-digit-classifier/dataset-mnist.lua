@@ -43,8 +43,8 @@ function mnist.loadDataset(fileName, maxLoad)
    local dataset = {}
    dataset.data = data
    dataset.labels = labels
-	dataset.encode_one_hot_targets = false
-	dataset.encode_binary_targets = false
+	-- if set to true, then the targets will be encoded in binary
+	dataset.binary_output = false
 
    function dataset:normalize(mean_, std_)
       local mean = mean_ or data:view(data:size(1), -1):mean(1)
@@ -78,63 +78,42 @@ function mnist.loadDataset(fileName, maxLoad)
       return nExample
    end
 
-	function dataset:makeOneHotEncoding() 
-		if encode_one_hot_targets then
-			print("Targets are coded as one hot vectors already!")
-			return
+	function binaryOutput(class)
+		local ovector = torch.Tensor(4):zero()
+		if (class % 2 >= 1) then
+			ovector[1] = 1
 		end
-		encode_one_hot_targets = true
-		local num_classes = 0
-		for i =1,labels:size(1) do
-			if tonumber(labels[i]) > num_classes then
-				num_classes = tonumber(labels[i])
-			end
+		if (class % 4 >= 2) then
+			ovector[2] = 1
 		end
-		self.targets = torch.FloatTensor(data:size(1), num_classes)
-		for i=1,data:size(1) do
-			self.targets[i]:zero()
-			self.targets[i][tonumber(labels[i])] = 1
+		if (class % 8 >= 4) then
+			ovector[3] = 1
 		end
+		if (class % 16 >= 8) then
+			ovector[4] = 1
+		end
+		return ovector
 	end
 
-	function dataset:makeBinaryEncoding() 
-		if encode_binary_targets then
-			print("Targets are coded as binary vectors already!")
-			return
-		end
-		encode_binary_targets = true
-		local num_classes = 0
-		for i =1,labels:size(1) do
-			if tonumber(labels[i]) > num_classes then
-				num_classes = tonumber(labels[i])
-			end
-		end
-		local ndim = math.ceil(math.log(num_classes)/math.log(2))
-		self.btargets = torch.FloatTensor(data:size(1), ndim)
-		for i=1,data:size(1) do
-			self.btargets[i]:zero()
-			local pow2 = 1
-			local numeric_label = tonumber(labels[i])
-			for j=1,ndim do
-				if numeric_label % math.pow(2, pow2) >= math.pow(2, pow2-1) then
-					self.btargets[i][j] = 1
-				end
-				pow2 = pow2 + 1
-			end
-		end
+   function ohOutput(class)
+		local ovector = torch.Tensor(10):zero()
+		ovector[class] = 1
+		return ovector
 	end
-
-   local labelvector = torch.zeros(10)
 
    setmetatable(dataset, {__index = function(self, index)
 			     local input = self.data[index]
 			     local class = self.labels[index]
-			     local label = labelvector:zero()
-			     label[class] = 1
+			     --local label = labelvector:zero()
+			     --label[class] = 1
+				  if self.binary_output then
+					  label = binaryOutput(class)
+				  else 
+					  label = ohOutput(class)
+				  end
 			     local example = {input, label}
-                                       return example
+              return example
    end})
 
    return dataset
 end
-
