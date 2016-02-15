@@ -23,8 +23,7 @@ require 'paths';
 -------------------------------------------------------------------------------
 -- parse command-line options
 --
--- TODO: logging, networking, plotting has not been implemented
--- TODO: coefL1, coefL2 are not yet implemented
+-- plotting has not been implemented
 local opt = lapp[[
 	-s, --save				(default "logs") 		subdirectory to save logs
 	-n, --network			(default "")			reload pretrained network	
@@ -39,7 +38,18 @@ local opt = lapp[[
 	-t, --threads			(default 4)				number of threads
 	--ntrain					(default 2000)			number of training examples (ignored if the -f flag is set)
 	--ntest					(default 1000)			number of test examples (ignored if the -f flag is set)
+	-i, --iterations		(default 5)				number of training epochs
+	-h, --hidden1			(default nil)			number of units in first hidden layer
+	--hidden2				(default nil)			number of units in second hidden layer
+	-v, --verbosity		(default 1)				verbosity level
 ]]
+
+-- Verbosity
+-- 0 prints only set up information
+-- 1 prints only training and test loss and epoch number
+-- 2 prints training and test loss and classification error
+-- 3 prints confusion matrices in addition to everything above
+--
 
 -- fix seed to get reproducible results
 torch.manualSeed(1)
@@ -52,23 +62,41 @@ print('<torch> set nb threads to ' .. torch.getnumthreads())
 torch.setdefaulttensortype('torch.FloatTensor')
 
 -- MNIST specific definitions
-classes = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '10'}
-geometry = {32, 32}
--- one-hot uses num_classes dimensional output layer
-num_classes = 10
--- binary uses num_bits dimensionay output layer
-num_bits = 4
+
+mtargs = {}
+mt.classes = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '10'}
+mt.geometry = {32, 32}
+
+-- determine number and sizes of hidden layers
+if opt.hidden2 ~= 'nil' and opt.hidden1 == 'nil' then
+	print("It's not nice to put a second hidden layer without putting a first one")
+	os.exit(1)
+elseif opt.hidden2 ~='nil' and opt.hidden1 ~= 'nil' then
+	mt.hiddens = {opt.hidden1, opt.hidden2} 
+elseif opt.hidden2 == 'nil' and opt.hidden1 ~= 'nil' then
+	mt.hiddens = {opt.hidden1}
+else
+	mt.hiddens = {}
+end
 
 -------------------------------------------------------------------------------
 -- define class to define functions
 mnist_train = {}
 
-function mnist_train.makeModel(n_hidden, n_outputs)
+function mnist_train.makeModel(h_sizes)
 	model = nn.Sequential()
 	model:add(nn.Reshape(1024))
-	model:add(nn.Linear(1024, n_hidden))
-	model:add(nn.Sigmoid())
-	model:add(nn.Linear(n_hidden, n_outputs))
+	local insize = 1024
+	for i=1,#h_sizes do
+		model:add(nn.Linear(insize, h_sizes[i]))
+		model:add(nn.Sigmoid())
+		insize = h_sizes[i]
+	end
+	local n_outputs = 10
+	if opt.encoding == 'binary' then
+		n_outputs = 4
+	end
+	model:add(nn.Linear(insize, n_outputs))
 	model:add(nn.Sigmoid())
 	return model
 end
@@ -83,14 +111,18 @@ function mnist_train.initialize()
 	-- reset epoch to 1
 	epoch = 1
 
-	--
 	-- Initialize the weights and biases of each layer
 	-- If l^{th} layer has n_l neurons, then the weights between the fully
 	-- connected layer between layer (l - 1) and l are all initialized to be
 	-- normal random variables with mean 0 and variance 1/(n_l)
-	-- TODO: The above is not yet implemented
+	local nlayers = #(model)
+	for i =1, nlayers do
+		if model.modules[i].weight ~= nil then
+			local tsize = model.modules[i].weight:size()
+			model.modules[i].weight:copy(torch.randn(tsize):mul(1/math.sqrt(tsize[2])))
+		end
+	end
 	parameters, gradParameters = model:getParameters()
-	parameters:copy(torch.randn(#parameters)):mul(0.1)
 
 	-- Use the squared error
 	criterion = nn.MSECriterion()
@@ -102,17 +134,17 @@ function mnist_train.initialize()
 		print('Using the entire dataset; this may be some time to run.')
 	else
 		nbTrainingExamples = opt.ntrain
-		nbTestingExamples = ot.ntest
+		nbTestingExamples = opt.ntest
 		print('Using ' .. nbTrainingExamples .. ' for training and ' ..
 		nbTestingExamples .. ' for testing.')
 	end
 
 	-- create training set and normalize
-	trainData = mnist.loadTrainSet(nbTrainingExamples, geometry)
+	trainData = mnist.loadTrainSet(nbTrainingExamples, mt.geometry)
 	mean, std = trainData:normalize()
 
 	-- create testing set and normalize
-	testData = mnist.loadTestSet(nbTestingExamples, geometry)
+	testData = mnist.loadTestSet(nbTestingExamples, mt.geometry)
 	testData:normalize(mean, std)
 
 	-- if binary coding is to be used set flags to make training and testing
@@ -121,6 +153,29 @@ function mnist_train.initialize()
 		trainData.binary_output = true
 		testData.binary_output = true
 	end
+
+	-- this matrix records confusion across classes
+	confusion = optim.ConfusionMatrix(mt.classes)
+
+	-- if log folder is not explicitly given then add timestamp to aovid overwriting
+	if opt.save == 'logs' then
+		opt.save = 'logs' .. string.gsub(string.gsub(os.date(), ' ', '_'), ':', '-')
+	end
+	trainLogger = optim.Logger(paths.concat(opt.save, 'train.log'))
+	testLogger = optim.Logger(paths.concat(opt.save, 'test.log'))
+end
+
+-- helper function
+function convert_to_labels(preds)
+	batchSize = preds:size(1)
+	local pred_labels = torch.Tensor(batchSize)
+	if opt.encoding == 'binary' then
+		local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
+		pred_labels = bmul*preds:ge(0.5):typeAs(bmul)
+	else
+		_, pred_labels = preds:max(2)
+	end
+	return pred_labels
 end
 
 -- training function
@@ -132,22 +187,28 @@ function mnist_train.train(dataset)
  	local time = sys.clock()
 
 	-- track training loss
-	-- TODO: initialize training_loss Tensors
-	-- TODO: initialize the confusion matrix
-	trainin_loss[epoch] = 0
+	-- don't add regularization term to training loss
+ 	-- instead keep track separately
+	local tr_loss = 0
+	local regularization = 0
  
  	-- do one epoch
- 	print('<trainer> on training set: ')
- 	print('<trainer> online epoch # ' .. epoch .. ' [batchSize = ' .. opt.batchSize .. ']')
+	if opt.verbosity >= 1 then
+ 		print('<mnist_train> on training set: epoch ' .. epoch)
+		if opt.verbosity >=2 then
+ 			print('<mnist_train> [batchSize = ' .. opt.batchSize .. ']')
+		end
+	end
  	for t = 1,dataset:size(), opt.batchSize do
  		-- create mini batch
- 		local inputs = torch.Tensor(opt.batchSize, 1, geometry[1], geometry[2])
- 		local targets = torch.Tensor(opt.batchSize, dataset[1][2]:size(1))
-		local target_labels = torch.Tensor(opt.batchSize)
+		-- first check size of minibatch (only required for last batch)
+		local batchSize = math.min(dataset:size() - t + 1, opt.batchSize)
+ 		local inputs = torch.Tensor(batchSize, 1, mt.geometry[1], mt.geometry[2])
+ 		local targets = torch.Tensor(batchSize, dataset[1][2]:size(1))
+		local target_labels = torch.Tensor(batchSize)
+		-- copy the next batchSize elements to create a minibatch
  		local k = 1
-		-- TODO: CHECK LINES BELOW
-		local t_batchSize = math.min(dataset:size() - t + 1, opt.batchSize)
- 		for i = t, math.min(t + opt.batchSize - 1, dataset:size()) do
+ 		for i = t, t + batchSize - 1 do
  			-- load new sample
  			local sample = dataset[i]
  			inputs[k] = sample[1]:clone()
@@ -170,25 +231,42 @@ function mnist_train.train(dataset)
   			gradParameters:zero()
   
   			-- evaluate function for complete minibatch
-  			local outputs = model:forward(inputs)
-  			local f = criterion:forward(outputs, targets)
+  			local preds = model:forward(inputs)
+  			local f = criterion:forward(preds, targets)
 
-  
   			-- estimate df/dW
-  			local df_do = criterion:backward(outputs, targets)
+  			local df_do = criterion:backward(preds, targets)
   			model:backward(inputs, df_do)
   
   			-- Penalties (add later)
-			-- TODO
+			if opt.coefL1 ~= 0 or opt.coefL2 ~= 0 then
+				-- Update the Gradients
+				-- The training loss will be update to reflect the regularization
+				-- term at the end of the epoch
+				gradParameters:add(torch.sign(parameters):mul(opt.coefL1) +
+				parameters:clone():mul(opt.coefL2))
+			end
 
 			-- Update training_loss
 			-- nn.MSECriterion() returns mean squared error over mini batch
-			if 
-			training_loss[epoch] = training_loss[epoch] + f*inputs:size(1)
+			tr_loss = tr_loss + f*batchSize
+
+			-- convert targets into pred_labels
+			local pred_labels = torch.Tensor(batchSize)
+			if opt.encoding == 'binary' then
+				local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
+				pred_labels = bmul * preds:ge(0.5):typeAs(bmul)
+			else
+				_, pred_labels = preds:max(1)
+			end
+			-- update confusion matrix
+			confusion:batchAdd(pred_labels, target_labels)
+
   
   			return f, gradParameters
 		end
 
+		-- optimize on current mini-batch
  		sgdState = sgdState or {
  			learningRate = opt.learningRate,
  			momentum = opt.momentum,
@@ -203,67 +281,140 @@ function mnist_train.train(dataset)
  	-- time taken
  	time = sys.clock() - time
  	time = time/dataset:size()
-	training_loss = training_loss/dataset:size()
- 	print("<trainer> time to learn 1 sample = " .. (time * 1000) .. 'ms')
- 	print("training_loss = " .. training_loss)
+	if opt.verbosity >=3 then
+ 		print("<trainer> time to learn 1 sample = " .. (time * 1000) .. 'ms')
+	end
 
+	-- adjust training loss and compute regularization terms 
+	tr_loss = tr_loss/dataset:size()
+	if opt.verbosity >=1 then
+ 		print("<trainer> training_loss = " .. tr_loss)
+	end
+	if opt.coefL1 ~= 0 or opt.coefL2 ~= 0 then
+		regularization = opt.coefL1*torch.norm(parameters, 1)
+		regularization =  opt.coefL2*torch.norm(parameters, 2)^2/2
+		if opt.verbosity >=2 then
+			print("<trainer> regularization term = " .. regularization)
+		end
+	end
+
+
+	-- print confusion matrix
+	if opt.verbosity >=3 then
+		print(confusion)
+	end
+
+	-- do logging
+	trainLogger:add{['criterion - squared error (train set)'] = tr_loss, ['regularization term (train set)'] = regularization, ['% mean class accuracy (train set)'] = confusion.totalValid * 100}
+
+	-- logs model at every epoch
+	local filename = paths.concat(opt.save, 'minst_epoch' .. epoch .. '.net')
+	if opt.verbosity >= 3 then
+		print('<trainer> saving network to ' .. filename)
+	end
+	torch.save(filename, model)
+
+	-- next epoch and reset confusion
 	epoch = epoch + 1
+	confusion:zero()
 end
 
 -- test function
-function test(dataset)
+function mnist_train.test(dataset)
+	-- rest confusion
+	confusion:zero()
+
 	-- local vars
 	local time = sys.clock()
-	local cl_acc = 0
-	test_loss = 0
+
+	-- track testing loss
+	local tst_loss = 0
 
 	-- test over given dataset
-	print('<trainer> on testing Set:')
+	if opt.verbosity >= 1 then	
+		print('<trainer> on testing set:')
+	end
 	for t = 1,dataset:size(), opt.batchSize do
-		-- dist process
+		-- disp process
 		xlua.progress(t, dataset:size())
 
 		-- create mini batch
-		local inputs = torch.Tensor(opt.batchSize, 1, geometry[1], geometry[2])
-		local targets = torch.Tensor(opt.batchSize, dataset[1][2]:size(1))
+		-- first check size of minibatch (only required for last batch)
+		local batchSize = math.min(dataset:size() - t + 1,
+		opt.batchSize)
+		local inputs = torch.Tensor(batchSize, 1, mt.geometry[1],
+		mt.geometry[2])
+		local targets = torch.Tensor(batchSize, dataset[1][2]:size(1))
+		local target_labels = torch.Tensor(batchSize)
+		-- copy the next batchSize elements to create a minibatch
 		local k = 1
-		for i = t, math.min(t + opt.batchSize - 1, dataset:size()) do
+		for i = t, t + batchSize - 1 do
 			-- load new sample
 			local sample = dataset[i]
-			local input = sample[1]:clone()
-			local target = sample[2]:clone()
-			inputs[k] = input
-			targets[k] = target
+			inputs[k] = sample[1]:clone()
+			targets[k] = sample[2]:clone()
+			target_labels[k] = dataset.labels[i]
 			k = k + 1
 		end
 
 		-- test samples
-		local raw_preds = model:forward(inputs)
-		test_loss = test_loss + criterion:forward(raw_preds, targets)*opt.batchSize
-		preds = raw_preds:ge(0.5)
-		cl_acc = cl_acc + preds:typeAs(targets):eq(targets):sum(2):eq(preds:size(2)):sum()
+		local preds = model:forward(inputs)
+		tst_loss = tst_loss + criterion:forward(preds,targets) * batchSize
+
+		-- predict labels
+		local pred_labels = torch.Tensor(batchSize)
+		if opt.encoding == 'binary' then
+			local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
+			pred_labels = bmul*preds:ge(0.5):typeAs(bmul)
+		else
+			_, pred_labels = preds:max(1)
+		end
+		confusion:batchAdd(pred_labels, target_labels)
 	end
 
 	-- timing
 	time = sys.clock() - time
 	time = time / dataset:size()
-	print("<trainer> time to test 1 sample = " .. (time * 100) .. 'ms')
+	if opt.verbosity >=3 then
+	 	print("<trainer> time to test 1 sample = " .. (time * 100) .. 'ms')
+	end
 
-	local cl_err = dataset:size() - cl_acc
-	cl_err = cl_err / dataset:size()
-	test_loss = test_loss/dataset:size()
-	print ('test_loss  = ' .. test_loss)
-	print ('Classification Error = ' .. cl_err)
+	-- adjust testing loss 
+	tst_loss = tst_loss/dataset:size()
+	if opt.verbosity >=1 then
+		print("<trainter> testing loss = " .. tst_loss)
+	end
+
+	-- print confusion matrix
+	if opt.verbosity >= 3 then
+		print(confusion)
+	end
+
+	-- do loggging
+	testLogger:add{['criterion - squared error (test set)'] = tst_loss, ['% mean class accuracy (test set)'] = tst_loss}
 end
 -------------------------------------------------------------------------------
 -- and train!
--- 
-function trainRounds(n_rounds) 
-	for i=1,n_rounds do
+--
+function do_all()
+	mnist_train.makeModel(mt.hiddens)
+	mnist_train.initialize()
+	for i=1,opt.iterations do
 		-- train/test
-		train(trainData)
-		test(testData)
+		mnist_train.train(trainData)
+		mnist_train.test(testData)
+		
+		-- plot errors
+		if opt.plot then
+			trainLogger:style{['% mean class accuracy (train set)'] = '-'}
+			testLogger:style{['% mean class accuracy (test set)'] = '-'}
+			trainLogger:plot()
+			testLogger:plot()
+		end
 	end
 end
--------------------------------------------------------------------------------
 
+print('If you did dofile from th')
+print('First check opt and mt')
+print('Only then run do_all()')
+---------------------------------------------------------------------------------------

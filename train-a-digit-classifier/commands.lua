@@ -1,10 +1,17 @@
 dofile('dataset-mnist.lua');
+opt = {}
+opt.encoding='one-hot'
 
--- torch.manualSeed(1)
+function convert_to_labels(preds)
+	batchSize = preds:size(1)
+	local pred_labels = torch.Tensor(batchSize)
+	if opt.encoding == 'binary' then
+		local bmul = torch.Tensor{1, 2, 4, 8}:reshape(1, 4)
+		pred_labels = bmul*preds:ge(0.5):typeAs(bmul)
+	else
+		_, pred_labels = preds:max(2)
+	end
+	return pred_labels
+end
 
--- model = makeModel(1024, 10)
-
-opt.full = true
-
-setup()
-
+dataset = mnist.loadTrainSet(10, {32, 32})
