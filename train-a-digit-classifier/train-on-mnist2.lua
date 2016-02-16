@@ -25,23 +25,23 @@ require 'paths';
 --
 -- plotting has not been implemented
 local opt = lapp[[
-	-s, --save				(default "logs") 		subdirectory to save logs
-	-n, --network			(default "")			reload pretrained network	
-	-e, --encoding			(default "one-hot")	specify output encoding: one-hot | binary
-	-f, --full											use the full detaset
-	-p, --plot											plot while training
-	-r, --learningRate	(default 4)				learning rate for SGD
-	-b, --batchSize		(default 10)			batch size
-	-m, --momentum			(default 0)				momentum for SGD
-	--coefL1					(default 0)				L1 penalty on the weights
-	--coefL2					(default 0)				L2 penalty on the weights
-	-t, --threads			(default 4)				number of threads
-	--ntrain					(default 2000)			number of training examples (ignored if the -f flag is set)
-	--ntest					(default 1000)			number of test examples (ignored if the -f flag is set)
-	-i, --iterations		(default 5)				number of training epochs
-	-h, --hidden1			(default nil)			number of units in first hidden layer
-	--hidden2				(default nil)			number of units in second hidden layer
-	-v, --verbosity		(default 1)				verbosity level
+	-s, --save		(default "logs") 	subdirectory to save logs
+	-n, --network		(default "")		reload pretrained network	
+	-e, --encoding		(default "one-hot")	specify output encoding: one-hot | binary
+	-f, --full					use the full dataset
+	-p, --plot					plot while training
+	-r, --learningRate	(default 4)		learning rate for SGD
+	-b, --batchSize		(default 10)		batch size
+	-m, --momentum		(default 0)		momentum for SGD
+	--coefL1		(default 0)		L1 penalty on the weights
+	--coefL2		(default 0)		L2 penalty on the weights
+	-t, --threads		(default 4)		number of threads
+	--ntrain		(default 2000)		number of training examples (ignored if the -f flag is set)
+	--ntest			(default 1000)		number of test examples (ignored if the -f flag is set)
+	-i, --iterations	(default 5)		number of training epochs
+	--hidden1		(default nil)		number of units in first hidden layer
+	--hidden2		(default nil)		number of units in second hidden layer
+	-v, --verbosity		(default 1)		verbosity level
 ]]
 
 -- Verbosity
@@ -72,9 +72,9 @@ if opt.hidden2 ~= 'nil' and opt.hidden1 == 'nil' then
 	print("It's not nice to put a second hidden layer without putting a first one")
 	os.exit(1)
 elseif opt.hidden2 ~='nil' and opt.hidden1 ~= 'nil' then
-	mt.hiddens = {opt.hidden1, opt.hidden2} 
+	mt.hiddens = {tonumber(opt.hidden1), tonumber(opt.hidden2)} 
 elseif opt.hidden2 == 'nil' and opt.hidden1 ~= 'nil' then
-	mt.hiddens = {opt.hidden1}
+	mt.hiddens = {tonumber(opt.hidden1)}
 else
 	mt.hiddens = {}
 end
@@ -159,10 +159,16 @@ function mnist_train.initialize()
 
 	-- if log folder is not explicitly given then add timestamp to aovid overwriting
 	if opt.save == 'logs' then
-		opt.save = 'logs' .. string.gsub(string.gsub(os.date(), ' ', '_'), ':', '-')
+		opt.save = 'logs_' .. string.gsub(string.gsub(os.date(), ' ', '_'), ':', '-')
 	end
 	trainLogger = optim.Logger(paths.concat(opt.save, 'train.log'))
 	testLogger = optim.Logger(paths.concat(opt.save, 'test.log'))
+	trainLossLogger = optim.Logger(paths.concat(opt.save, 'train_loss.log'))
+	testLossLogger = optim.Logger(paths.concat(opt.save, 'test_loss.log'))
+	regularizationLogger = optim.Logger(paths.concat(opt.save, 'regularization.log'))
+
+	-- save opt
+	torch.save(paths.concat(opt.save, 'opt_parameters.txt'), opt)
 end
 
 -- helper function
@@ -171,7 +177,7 @@ function convert_to_labels(preds)
 	local pred_labels = torch.Tensor(batchSize)
 	if opt.encoding == 'binary' then
 		local bmul = torch.Tensor{1, 2, 4, 8}:reshape(4, 1)
-		pred_labels = preds:ge(0.5):typeAs(bmul)*bmul
+		pred_labels = (preds:ge(0.5):typeAs(bmul)*bmul):squeeze():apply(function (x) return math.max(math.min(x, 10), 1) end)
 	else
 		_, pred_labels = preds:max(2)
 	end
@@ -252,7 +258,7 @@ function mnist_train.train(dataset)
 			tr_loss = tr_loss + f*batchSize
 
 			-- convert targets into pred_labels
-			local pred_labels = convert_to_labels(preds)
+			local pred_labels = convert_to_labels(preds):squeeze()
 			-- update confusion matrix
 			confusion:batchAdd(pred_labels, target_labels)
 
@@ -299,7 +305,10 @@ function mnist_train.train(dataset)
 	end
 
 	-- do logging
-	trainLogger:add{['criterion - squared error (train set)'] = tr_loss, ['regularization term (train set)'] = regularization, ['% mean class accuracy (train set)'] = confusion.totalValid * 100}
+	
+	trainLogger:add{['% mean class accuracy (train set)'] = confusion.totalValid * 100}
+	trainLossLogger:add{['criterion - squared error (train set)'] = tr_loss}
+	regularizationLogger:add{['regularization term (train set)'] = regularization}
 
 	-- logs model at every epoch
 	local filename = paths.concat(opt.save, 'minst_epoch' .. epoch .. '.net')
@@ -380,7 +389,8 @@ function mnist_train.test(dataset)
 	end
 
 	-- do loggging
-	testLogger:add{['criterion - squared error (test set)'] = tst_loss, ['% mean class accuracy (test set)'] = tst_loss}
+	testLogger:add{['% mean class accuracy (test set)'] = confusion.totalValid * 100}
+	testLossLogger:add{['criterion - squared error (test set)'] = tst_loss}
 end
 -------------------------------------------------------------------------------
 -- and train!
@@ -397,8 +407,12 @@ function do_all()
 		if opt.plot then
 			trainLogger:style{['% mean class accuracy (train set)'] = '-'}
 			testLogger:style{['% mean class accuracy (test set)'] = '-'}
+			trainLossLogger:style{['criterion - squared error (train set)'] = '-'}
+			testLossLogger:style{['criterion - squared error (test set)'] = '-'}
 			trainLogger:plot()
 			testLogger:plot()
+			trainLossLogger:plot()
+			testLossLogger:plot()
 		end
 	end
 end
