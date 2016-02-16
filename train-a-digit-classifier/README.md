@@ -2,7 +2,7 @@
 
 The purpose is to compare coding the outputs as one-hot or binary. 
 
-To understand all the possible flags you can set run 
+To understand all the possible flags you can set, run:
 
 ``
 th train-on-minst2.lua -h
