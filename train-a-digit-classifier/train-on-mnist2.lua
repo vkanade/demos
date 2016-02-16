@@ -171,13 +171,37 @@ function mnist_train.initialize()
 	torch.save(paths.concat(opt.save, 'opt_parameters.txt'), opt)
 end
 
--- helper function
+-- helper functions
+-- when the output is 10 dimensional then it simply picks the largest value as label
+-- when the output is binary, it rounds to 0, 1 each output and then outputs the resulting number in binary
+-- since the classes are only between 1-10, 0 -> 1 and 11-15 -> 10
 function convert_to_labels(preds)
 	batchSize = preds:size(1)
 	local pred_labels = torch.Tensor(batchSize)
 	if opt.encoding == 'binary' then
 		local bmul = torch.Tensor{1, 2, 4, 8}:reshape(4, 1)
 		pred_labels = (preds:ge(0.5):typeAs(bmul)*bmul):squeeze():apply(function (x) return math.max(math.min(x, 10), 1) end)
+	else
+		_, pred_labels = preds:max(2)
+	end
+	return pred_labels
+end
+-- same as above except here attempt is made to find the closest binary encoding
+-- preferred usage is this function
+function convert_to_labels2(preds)
+	batchSize = preds:size(1)
+	local pred_labels = torch.Tensor(batchSize)
+	if opt.encoding == 'binary' then
+		local bcode = torch.Tensor(10, 4):zero()
+		local distances = torch.Tensor(batchSize, 10)
+		for i =1, 10 do
+			if i%2 >=1 then bcode[i][1] = 1 end
+			if i%4 >=2 then bcode[i][2] = 1 end
+			if i%8 >=4 then bcode[i][3] = 1 end
+			if i%16 >=8 then bcode[i][4] = 1 end
+			distances[{{}, {i}}]:copy(torch.norm(bcode[i]:reshape(1, 4):expand(batchSize, 4) - preds, 2, 2))
+		end
+		_, pred_labels = distances:min(2)
 	else
 		_, pred_labels = preds:max(2)
 	end
@@ -244,7 +268,7 @@ function mnist_train.train(dataset)
   			local df_do = criterion:backward(preds, targets)
   			model:backward(inputs, df_do)
   
-  			-- Penalties (add later)
+  			-- Penalties (L1 and L2)
 			if opt.coefL1 ~= 0 or opt.coefL2 ~= 0 then
 				-- Update the Gradients
 				-- The training loss will be update to reflect the regularization
@@ -258,7 +282,7 @@ function mnist_train.train(dataset)
 			tr_loss = tr_loss + f*batchSize
 
 			-- convert targets into pred_labels
-			local pred_labels = convert_to_labels(preds):squeeze()
+			local pred_labels = convert_to_labels2(preds):squeeze()
 			-- update confusion matrix
 			confusion:batchAdd(pred_labels, target_labels)
 
@@ -365,7 +389,7 @@ function mnist_train.test(dataset)
 		tst_loss = tst_loss + criterion:forward(preds,targets) * batchSize
 
 		-- predict labels
-		local pred_labels = convert_to_labels(preds)
+		local pred_labels = convert_to_labels2(preds)
 		-- add to confusion matrix
 		confusion:batchAdd(pred_labels, target_labels)
 	end
