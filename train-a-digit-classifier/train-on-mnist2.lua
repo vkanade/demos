@@ -23,7 +23,6 @@ require 'paths';
 -------------------------------------------------------------------------------
 -- parse command-line options
 --
--- plotting has not been implemented
 local opt = lapp[[
 	-s, --save		(default "logs") 	subdirectory to save logs
 	-n, --network		(default "")		reload pretrained network	
